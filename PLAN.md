@@ -1,8 +1,10 @@
 # PLAN.md — toonq
 
-## Status: v0.2.0 ✅
+## Status: v0.2.4 ✅
 
-495 lines of Rust, 1.8MB binary, 16 tests, 0 runtime dependencies.
+534 lines of Rust (main.rs 504 + build.rs 34), 16 tests, 0 runtime dependencies.
+
+Published on [crates.io](https://crates.io/crates/toonq). CI on every push to main and tag.
 
 ## Architecture
 
@@ -39,10 +41,18 @@ TOON ← serde_toon ← serde_json::Value ← jaq_to_json() ← jaq_json::Val
 - Truncation: `--truncate N`
 - Format: `--to json`/`toon`/`raw`, `--from json`/`auto`
 - Pipelines: stdin → stdout, chaining
+- `--version` shows git hash (via build.rs + GIT_HASH file in CI)
 
 ## Files
 
-- `src/main.rs` — 495 lines
+- `src/main.rs` — 504 lines
+- `build.rs` — 34 lines (git hash embedding)
 - `test.sh` — 16 tests
 - `docs/serde-research.md` — serde/serde_core deep dive
 - `docs/recipes.md` — real-world workflows
+
+## CI
+
+Single workflow in `.gitverse/workflows/ci.yml`:
+- **test**: git clone, cargo build, cargo test (on every push/PR to main)
+- **publish**: version verification, dry-run, publish to crates.io (on tags `v*`)

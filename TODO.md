@@ -25,9 +25,13 @@
 - [x] --extract "0,2,8" (comma-separated)
 - [x] 16 tests
 
-## Backlog
+## Phase 6: Release infra ✅
+- [x] crates.io publishing (v0.2.0 → v0.2.4)
+- [x] GitVerse CI (test + publish on tags)
+- [x] GitHub mirror
+- [x] `--version` shows git hash (build.rs)
 
-- [ ] `cargo publish` to crates.io
-- [ ] GitHub/GitVerse mirror
-- [ ] CI (GitHub Actions)
+## Backlog
 - [ ] `--color` flag
+- [ ] More test coverage (edge cases for JSONL, numbers)
+- [ ] Shell completions
