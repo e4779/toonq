@@ -19,7 +19,7 @@ use serde_toon;
     version,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
-    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # JSONL support\n  toonq --slurp --count data.jsonl      # Parse JSONL as array\n  toonq --from json --count data.jsonl  # Auto-detect JSONL\n  toonq --slurp --truncate 80 --head 3 data.jsonl\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count",
+    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # JSONL support\n  toonq --slurp --count data.jsonl      # Parse JSONL as array\n  toonq --from json --count data.jsonl  # Auto-detect JSONL\n  toonq --slurp --truncate 80 --head 3 data.jsonl\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Extract fields (chat logs, API responses)\n  toonq --extract text chat.json        # All messages at once\n  toonq --extract close data.toon       # All close prices\n  # Equivalent jq: toonq -f 'map(.text)' chat.json\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count",
 )]
 struct Cli {
     /// jq filter expression to apply to input data.
@@ -64,10 +64,16 @@ struct Cli {
     #[arg(long, verbatim_doc_comment)]
     stats: bool,
 
-    /// Read input as JSONL (one JSON value per line) and combine into an array.
-    /// Equivalent to `jq -s '.'`. Auto-detected when JSON parsing fails.
+    /// Slurp JSONL input into an array (like `jq -s '.'`).
+    /// Auto-detected when JSON parsing fails.
     #[arg(long = "slurp", verbatim_doc_comment)]
     slurp: bool,
+
+    /// Extract values of FIELD from all objects in the array.
+    /// Shortcut for `-f 'map(.FIELD)'`. Useful for chat logs, API responses.
+    /// Example: toonq --extract text chat.json
+    #[arg(long = "extract", verbatim_doc_comment)]
+    extract: Option<String>,
 
     /// Truncate string fields to N characters, appending "…" if truncated.
     /// Useful for inspecting data with long text fields.
@@ -81,7 +87,7 @@ fn main() -> anyhow::Result<()> {
     let has_operation = cli.filter.is_some()
         || cli.schema || cli.count
         || cli.head.is_some() || cli.tail.is_some()
-        || cli.stats || cli.slurp || cli.truncate.is_some()
+        || cli.stats || cli.slurp || cli.truncate.is_some() || cli.extract.is_some()
         || cli.output_format != "toon"
         || cli.input_format != "auto";
 
@@ -142,6 +148,8 @@ fn main() -> anyhow::Result<()> {
         head(&value, n)
     } else if let Some(n) = cli.tail {
         tail(&value, n)
+    } else if let Some(field) = &cli.extract {
+        extract_field(&value, field)
     } else if let Some(filter) = &cli.filter {
         run_jaq_native(&value, filter, cli.output_format.as_str())?
     } else {
@@ -150,6 +158,9 @@ fn main() -> anyhow::Result<()> {
 
     if cli.output_format != "raw" {
         output_value(&result, &cli.output_format)?;
+    } else {
+        // Raw mode for non-filter operations: print compact JSON
+        println!("{}", serde_json::to_string(&result)?);
     }
 
     Ok(())
@@ -354,6 +365,18 @@ fn count(value: &Value) -> Value {
         _ => 1,
     };
     Value::Number(n.into())
+}
+
+fn extract_field(value: &Value, field: &str) -> Value {
+    match value {
+        Value::Array(arr) => {
+            Value::Array(arr.iter()
+                .filter_map(|v| v.get(field).cloned())
+                .collect())
+        }
+        Value::Object(obj) => obj.get(field).cloned().unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
 }
 
 fn head(value: &Value, n: usize) -> Value {
