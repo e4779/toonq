@@ -2,7 +2,7 @@ use std::env;
 use std::process::Command;
 
 fn main() {
-    let hash = env::var("TOONQ_GIT_HASH").ok()
+    let hash = env::var("CARGO_TOONQ_GIT_HASH").ok()
         .or_else(|| {
             Command::new("git")
                 .args(["rev-parse", "--short", "HEAD"])
@@ -13,7 +13,7 @@ fn main() {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    let full = env::var("TOONQ_GIT_FULL_HASH").ok()
+    let full = env::var("CARGO_TOONQ_GIT_FULL_HASH").ok()
         .or_else(|| {
             Command::new("git")
                 .args(["rev-parse", "HEAD"])
