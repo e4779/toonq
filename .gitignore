@@ -13,3 +13,6 @@ Thumbs.db
 
 # Test artifacts
 /tmp/
+
+# Generated during CI publish
+GIT_HASH
