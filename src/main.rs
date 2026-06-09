@@ -1,7 +1,6 @@
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -20,7 +19,7 @@ use serde_toon;
     version,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
-    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count\n\nRequires `jaq` or `jq` for filter execution (falls back to `jq` if `jaq` is not installed).",
+    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count",
 )]
 struct Cli {
     /// jq filter expression to apply to input data.
@@ -69,13 +68,12 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Determine if we have any operation to perform
     let has_operation = cli.filter.is_some()
         || cli.schema || cli.count
         || cli.head.is_some() || cli.tail.is_some()
         || cli.stats
-        || cli.output_format != "toon"  // format conversion is an operation
-        || cli.input_format != "auto";   // explicit input format is an operation
+        || cli.output_format != "toon"
+        || cli.input_format != "auto";
 
     if !has_operation {
         anyhow::bail!(
@@ -86,13 +84,11 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // 1. Read input
     let input_text = read_input(cli.input.as_deref())?;
     if input_text.trim().is_empty() {
         return Ok(());
     }
 
-    // 2. Detect format and parse → serde_json::Value
     let format = detect_format(&cli.input_format, cli.input.as_deref());
     let value: Value = match format.as_str() {
         "toon" => serde_toon::from_str(&input_text)
@@ -102,13 +98,11 @@ fn main() -> anyhow::Result<()> {
         other => bail!("Unknown input format: {other}"),
     };
 
-    // 3. Stats mode — short-circuit (stats prints its own output)
     if cli.stats {
         print_stats(&input_text, &value);
         return Ok(());
     }
 
-    // 4. Apply filter or inspection command
     let result = if cli.schema {
         schema(&value)
     } else if cli.count {
@@ -118,13 +112,11 @@ fn main() -> anyhow::Result<()> {
     } else if let Some(n) = cli.tail {
         tail(&value, n)
     } else if let Some(filter) = &cli.filter {
-        run_jaq_filter(&value, filter, cli.output_format.as_str())?
+        run_jaq_native(&value, filter, cli.output_format.as_str())?
     } else {
-        // Identity — format conversion only
         value.clone()
     };
 
-    // 5. Output (only for non-raw mode; raw is handled inside run_jaq_filter)
     if cli.output_format != "raw" {
         output_value(&result, &cli.output_format)?;
     }
@@ -158,86 +150,131 @@ fn detect_format(explicit: &str, path: Option<&std::path::Path>) -> String {
             _ => {}
         }
     }
-    "toon".into() // default for stdin
+    "toon".into()
 }
 
-// ── Filter execution ───────────────────────────────────────────────────────
+// ── Native jaq filter (no subprocess, no JSON roundtrip) ──────────────────
 
-/// Check if jaq is available. If not, we fall back to jq.
-fn which_jaq() -> bool {
-    std::process::Command::new("jaq")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
+use jaq_all::json::Val as JVal;
 
-fn run_jaq_filter(value: &Value, filter: &str, output_format: &str) -> anyhow::Result<Value> {
-    let json_str = serde_json::to_string(value)?;
-
-    // Try jaq first, fall back to jq
-    let engine = if which_jaq() { "jaq" } else { "jq" };
-
-    let mut cmd = Command::new(engine);
-    cmd.arg("-c"); // compact output — one JSON value per line
-    cmd.arg(filter);
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd.spawn()
-        .context(format!(
-            "Failed to spawn {engine}. Install jaq (cargo install jaq) or jq (apt install jq)."
-        ))?;
-
-    // Write input JSON and close stdin
-    {
-        let mut stdin = child.stdin.take()
-            .context("Failed to open jaq stdin")?;
-        stdin.write_all(json_str.as_bytes())?;
-    }
-
-    let output = child.wait_with_output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{engine} failed (status {}): {stderr}", output.status);
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-
-    // Raw mode — print jaq output directly and exit
-    if output_format == "raw" {
-        if !stdout.is_empty() {
-            print!("{stdout}");
+fn json_to_jaq(v: &Value) -> JVal {
+    match v {
+        Value::Null => JVal::Null,
+        Value::Bool(b) => JVal::Bool(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                if i >= isize::MIN as i64 && i <= isize::MAX as i64 {
+                    // machine integer range
+                    JVal::Num(jaq_all::json::Num::Int(i as isize))
+                } else {
+                    JVal::Num(jaq_all::json::Num::from_integral(i))
+                }
+            } else if let Some(f) = n.as_f64() {
+                JVal::Num(jaq_all::json::Num::Float(f))
+            } else {
+                JVal::Null
+            }
         }
-        // Return a dummy value so the caller doesn't print anything else
+        Value::String(s) => JVal::utf8_str(s.clone()),
+        Value::Array(arr) => arr.iter().map(json_to_jaq).collect(),
+        Value::Object(obj) => {
+            let pairs: Vec<(JVal, JVal)> = obj.iter()
+                .map(|(k, v)| (JVal::utf8_str(k.clone()), json_to_jaq(v)))
+                .collect();
+            JVal::obj(pairs.into_iter().collect())
+        }
+    }
+}
+
+/// Extract a raw Rust string from a JVal (for object keys).
+fn val_to_raw_string(v: &JVal) -> String {
+    match v {
+        JVal::BStr(data) | JVal::TStr(data) => String::from_utf8_lossy(data).into_owned(),
+        _ => v.to_string(),
+    }
+}
+
+fn jaq_to_json(v: &JVal) -> Value {
+    use jaq_all::json::Num;
+    match v {
+        JVal::Null => Value::Null,
+        JVal::Bool(b) => Value::Bool(*b),
+        JVal::Num(n) => match n {
+            Num::Int(i) => Value::Number((*i).into()),
+            Num::Float(f) => {
+                serde_json::Number::from_f64(*f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
+            // BigInt and Dec: format as string, parse back
+            _ => {
+                let s = n.to_string();
+                if let Ok(i) = s.parse::<i64>() {
+                    Value::Number(i.into())
+                } else if let Ok(f) = s.parse::<f64>() {
+                    serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null)
+                } else {
+                    Value::String(s)
+                }
+            }
+        },
+        JVal::BStr(data) | JVal::TStr(data) => {
+            // Extract raw bytes, convert to UTF-8 string
+            Value::String(String::from_utf8_lossy(data).into_owned())
+        }
+        JVal::Arr(arr) => Value::Array(arr.iter().map(jaq_to_json).collect()),
+        JVal::Obj(obj) => {
+            let map: serde_json::Map<String, Value> = obj.iter()
+                .map(|(k, v)| (val_to_raw_string(k), jaq_to_json(v)))
+                .collect();
+            Value::Object(map)
+        }
+    }
+}
+
+fn run_jaq_native(value: &Value, filter_str: &str, output_format: &str) -> anyhow::Result<Value> {
+    use jaq_all::data;
+    use jaq_all::jaq_core::Vars;
+
+    let jaq_input = json_to_jaq(value);
+
+    let filter = data::compile(filter_str)
+        .map_err(|reports| {
+            let msgs: Vec<String> = reports.iter()
+                .flat_map(|r| r.1.iter().map(|m| format!("{m:?}")))
+                .collect();
+            anyhow::anyhow!("jaq compile error: {}", msgs.join("\n"))
+        })?;
+
+    let runner = data::Runner::default();
+    let mut results: Vec<JVal> = Vec::new();
+
+    data::run(
+        &runner,
+        &filter,
+        Vars::new([]),
+        std::iter::once(Ok::<_, String>(jaq_input)),
+        |e| anyhow::anyhow!("jaq input error: {e}"),
+        |v| {
+            results.push(v.map_err(|e| anyhow::anyhow!("jaq error: {e}"))?);
+            Ok(())
+        },
+    ).map_err(|e| anyhow::anyhow!("jaq execution error: {e}"))?;
+
+    if output_format == "raw" {
+        for v in &results {
+            println!("{v}");
+        }
         return Ok(Value::Null);
     }
 
-    let stdout = stdout.trim();
-
-    if stdout.is_empty() {
-        return Ok(Value::Null);
-    }
-
-    // Parse results — jaq -c outputs one JSON value per line
-    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
-
-    if lines.is_empty() {
-        return Ok(Value::Null);
-    }
-
-    if lines.len() == 1 {
-        return Ok(serde_json::from_str(lines[0])?);
-    }
-
-    let items: Result<Vec<Value>, _> = lines.iter()
-        .map(|l| serde_json::from_str(l))
-        .collect();
-    Ok(Value::Array(items?))
+    Ok(match results.len() {
+        0 => Value::Null,
+        1 => jaq_to_json(&results[0]),
+        _ => Value::Array(results.iter().map(jaq_to_json).collect()),
+    })
 }
 
 // ── Output ─────────────────────────────────────────────────────────────────
@@ -254,8 +291,6 @@ fn output_value(value: &Value, format: &str) -> anyhow::Result<()> {
             println!("{out}");
         }
         "raw" => {
-            // raw is handled in run_jaq_filter, but if we get here
-            // (e.g., from --head without a filter), just print JSON
             let out = serde_json::to_string(value)?;
             println!("{out}");
         }
@@ -332,7 +367,6 @@ fn print_stats(input_text: &str, value: &Value) {
         _ => 1,
     };
 
-    // Rough token estimate: 1 token ≈ 4 characters
     let toon_tokens = toon_bytes / 4;
     let json_tokens = json_bytes / 4;
 

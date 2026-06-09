@@ -14,8 +14,7 @@ toonq --to json data.toon | jq '. | length'
 cargo install toonq
 ```
 
-Requires `jq` or `jaq` for filter execution. Most systems already have `jq`.
-For a Rust-native engine: `cargo install jaq`.
+No external dependencies. Everything is compiled into the binary.
 
 Or from source:
 
@@ -98,12 +97,11 @@ cat data.toon | toonq --count
 ## How it works
 
 ```
-TOON → serde_toon (Rust) → JSON → jaq -c subprocess → JSON → serde_toon → TOON
-         native parser    ↑       jq-compatible engine  ↑      native output
-                          └────── compact output ───────┘
+TOON → serde_toon (Rust) → jaq-all (native lib) → serde_toon → TOON
+         native parser       jq-compatible engine    native output
 ```
 
-`toonq` uses `jaq` (or falls back to `jq`) as a subprocess. While `jaq` is written in Rust, its library (`jaq-core`/`jaq-all`) has a complex abstract API with incompatible `serde_core` types — making in-process integration fragile and high-maintenance. The subprocess approach is simpler, more robust, and gives identical results. TOON ↔ JSON conversion happens natively in Rust via `serde_toon_format`.
+`toonq` uses `jaq-all` — the same jq engine library that powers the `jaq` binary — directly in-process. No subprocess, no JSON serialization roundtrip, no external dependencies at runtime. TOON ↔ `serde_json::Value` happens natively via `serde_toon_format`, and `serde_json::Value` ↔ `jaq_json::Val` is a zero-cost manual conversion.
 
 ## License
 
