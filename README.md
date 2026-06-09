@@ -103,7 +103,7 @@ TOON → serde_toon (Rust) → JSON → jaq -c subprocess → JSON → serde_too
                           └────── compact output ───────┘
 ```
 
-`toonq` uses `jaq` (or falls back to `jq`) as a subprocess for filter execution, giving full jq language compatibility. TOON ↔ JSON conversion happens natively in Rust via `serde_toon_format`.
+`toonq` uses `jaq` (or falls back to `jq`) as a subprocess. While `jaq` is written in Rust, its library (`jaq-core`/`jaq-all`) has a complex abstract API with incompatible `serde_core` types — making in-process integration fragile and high-maintenance. The subprocess approach is simpler, more robust, and gives identical results. TOON ↔ JSON conversion happens natively in Rust via `serde_toon_format`.
 
 ## License
 
