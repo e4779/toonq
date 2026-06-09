@@ -4,8 +4,8 @@ CLI tool for querying, filtering, inspecting, and converting [TOON](https://toon
 
 ```
 toonq -f '.[] | select(.close > 10000) | {date, close}' data.toon
-toonq --stats data.toon
-toonq --to json data.toon | jq '. | length'
+toonq --extract close data.toon
+toonq --slurp --count session.jsonl
 ```
 
 ## Installation
@@ -14,36 +14,35 @@ toonq --to json data.toon | jq '. | length'
 cargo install toonq
 ```
 
-No external dependencies. Everything is compiled into the binary.
-
-Or from source:
-
-```bash
-git clone https://github.com/.../toonq.git
-cd toonq
-cargo install --path .
-```
+No external dependencies. Everything (jaq engine, TOON parser, JSONL support) is compiled into the binary.
 
 ## Quick start
 
 ```bash
-# Inspect a TOON file
+# Inspect
 toonq --head 5 data.toon              # First 5 records
 toonq --count data.toon               # How many records?
 toonq --schema data.toon              # What fields and types?
 toonq --stats data.toon               # TOON vs JSON size comparison
 
-# Query with jq syntax
+# Query with full jq syntax
 toonq -f '.[] | select(.close > 100)' data.toon
 toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon
 
-# Convert formats
-toonq --to json data.toon             # TOON → JSON
-toonq --from json data.json           # JSON → TOON
+# Extract fields (one call for all records)
+toonq --extract text chat.json        # All messages
+toonq --extract "0,2,8" chat.json     # Specific indices
+
+# JSONL support
+toonq --slurp --count data.jsonl      # Parse line-delimited JSON
+toonq --slurp --truncate 80 --head 3 data.jsonl  # With truncation
+
+# Convert
+toonq --to json data.toon
+toonq --from json data.json
 
 # Pipeline
 cat data.toon | toonq -f '.[0:10]' | toonq --stats
-toonq --to json data.toon | jq 'group_by(.currency)'
 ```
 
 ## Features
@@ -52,11 +51,12 @@ toonq --to json data.toon | jq 'group_by(.currency)'
 
 | Flag | Description |
 |------|-------------|
-| `--head N` | First N records (= jq `.[0:N]`) |
-| `--tail N` | Last N records (= jq `.[-N:]`) |
-| `--count` | Number of records |
+| `--head N` | First N records |
+| `--tail N` | Last N records |
+| `--count` | Record count |
 | `--schema` | Field names and types |
 | `--stats` | Token statistics (TOON vs JSON savings) |
+| `--truncate N` | Truncate string fields to N chars |
 
 ### Queries
 
@@ -68,20 +68,37 @@ toonq -f 'sort_by(-.date) | .[0:5] | {date, close}' data.toon
 toonq -f 'group_by(.currency) | .[] | {currency: .[0].currency, count: length}' portfolio.toon
 ```
 
+### Field extraction
+
+`--extract` pulls values by field name or array index:
+
+```bash
+toonq --extract close data.toon       # All close prices
+toonq --extract role chat.json        # All roles
+toonq --extract 0 chat.json           # First record
+toonq --extract "0,2,8" chat.json     # Multiple records by index
+```
+
+### JSONL support
+
+`--slurp` reads line-delimited JSON as an array. Auto-detected when JSON parsing fails:
+
+```bash
+toonq --slurp --count data.jsonl
+toonq --from json --count data.jsonl  # Auto-detect
+```
+
 ### Format conversion
 
 | Flag | Description |
 |------|-------------|
 | `--to json` | Output as pretty-printed JSON |
 | `--to toon` | Output as TOON (default) |
-| `--to raw` | Raw compact JSON from jaq (for pipelines) |
+| `--to raw` | Compact JSON for pipelines |
 | `--from json` | Read JSON input |
-| `--from toon` | Read TOON input |
-| `--from auto` | Auto-detect by file extension (default) |
+| `--from auto` | Auto-detect by file extension |
 
 ### Pipelines
-
-`toonq` reads from stdin and writes to stdout by default:
 
 ```bash
 toonq -f 'filter' data.toon | toonq --head 3
@@ -89,19 +106,20 @@ toonq --to json data.toon | jq '. | length'
 cat data.toon | toonq --count
 ```
 
-## Requirements
-
-- `jq` or `jaq` — `jq` is available on most systems (`apt install jq`, `brew install jq`). For a Rust-native engine: `cargo install jaq`.
-- Rust toolchain for building from source
-
 ## How it works
 
 ```
-TOON → serde_toon (Rust) → jaq-all (native lib) → serde_toon → TOON
-         native parser       jq-compatible engine    native output
+TOON → serde_toon → jaq-all (native lib) → serde_toon → TOON
+        JSON parser    jq-compatible engine    TOON encoder
 ```
 
-`toonq` uses `jaq-all` — the same jq engine library that powers the `jaq` binary — directly in-process. No subprocess, no JSON serialization roundtrip, no external dependencies at runtime. TOON ↔ `serde_json::Value` happens natively via `serde_toon_format`, and `serde_json::Value` ↔ `jaq_json::Val` is a zero-cost manual conversion.
+`toonq` uses `jaq-all` — the same engine that powers the `jaq` binary — directly in-process. No subprocess, no JSON roundtrip, no runtime dependencies. See [docs/serde-research.md](docs/serde-research.md) for the architectural deep-dive.
+
+## Documentation
+
+- [docs/recipes.md](docs/recipes.md) — real-world workflows (chat logs, JSONL, financial data)
+- [docs/serde-research.md](docs/serde-research.md) — why manual Val conversion, serde/serde_core investigation
+- `toonq --help` — all flags and basic examples
 
 ## License
 

@@ -1,10 +1,11 @@
 [package]
 name = "toonq"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "jq for TOON — query, filter, and inspect Token-Oriented Object Notation files"
 license = "ISC"
-keywords = ["toon", "jq", "cli", "json", "data"]
+repository = "https://gitverse.ru/e4779/toonq"
+keywords = ["toon", "jq", "cli", "json", "jsonl", "data"]
 categories = ["command-line-utilities"]
 
 [dependencies]
