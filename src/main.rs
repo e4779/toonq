@@ -20,7 +20,7 @@ use serde_toon;
     version,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
-    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count\n\nRequires `jaq` to be installed (cargo install jaq).",
+    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count\n\nRequires `jaq` or `jq` for filter execution (falls back to `jq` if `jaq` is not installed).",
 )]
 struct Cli {
     /// jq filter expression to apply to input data.
@@ -163,10 +163,24 @@ fn detect_format(explicit: &str, path: Option<&std::path::Path>) -> String {
 
 // ── Filter execution ───────────────────────────────────────────────────────
 
+/// Check if jaq is available. If not, we fall back to jq.
+fn which_jaq() -> bool {
+    std::process::Command::new("jaq")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn run_jaq_filter(value: &Value, filter: &str, output_format: &str) -> anyhow::Result<Value> {
     let json_str = serde_json::to_string(value)?;
 
-    let mut cmd = Command::new("jaq");
+    // Try jaq first, fall back to jq
+    let engine = if which_jaq() { "jaq" } else { "jq" };
+
+    let mut cmd = Command::new(engine);
     cmd.arg("-c"); // compact output — one JSON value per line
     cmd.arg(filter);
     cmd.stdin(Stdio::piped());
@@ -174,7 +188,9 @@ fn run_jaq_filter(value: &Value, filter: &str, output_format: &str) -> anyhow::R
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd.spawn()
-        .context("Failed to spawn jaq. Is it installed? (cargo install jaq)")?;
+        .context(format!(
+            "Failed to spawn {engine}. Install jaq (cargo install jaq) or jq (apt install jq)."
+        ))?;
 
     // Write input JSON and close stdin
     {
@@ -187,7 +203,7 @@ fn run_jaq_filter(value: &Value, filter: &str, output_format: &str) -> anyhow::R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("jaq failed (status {}): {stderr}", output.status);
+        bail!("{engine} failed (status {}): {stderr}", output.status);
     }
 
     let stdout = String::from_utf8(output.stdout)?;
