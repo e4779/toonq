@@ -69,9 +69,9 @@ struct Cli {
     #[arg(long = "slurp", verbatim_doc_comment)]
     slurp: bool,
 
-    /// Extract values of FIELD from all objects in the array.
-    /// Shortcut for `-f 'map(.FIELD)'`. Useful for chat logs, API responses.
-    /// Example: toonq --extract text chat.json
+    /// Extract values by field name or array index.
+    /// Comma-separated for multiple: --extract "0,2,5" or --extract "name,age".
+    /// Shortcut for `-f 'map(.FIELD)'` or `-f '.[INDEX]'`.
     #[arg(long = "extract", verbatim_doc_comment)]
     extract: Option<String>,
 
@@ -368,8 +368,25 @@ fn count(value: &Value) -> Value {
 }
 
 fn extract_field(value: &Value, field: &str) -> Value {
+    // Comma-separated: extract multiple indices/fields
+    if field.contains(',') {
+        let keys: Vec<&str> = field.split(',').map(|s| s.trim()).collect();
+        let results: Vec<Value> = keys.iter()
+            .filter_map(|k| Some(extract_single(value, k)))
+            .collect();
+        return Value::Array(results);
+    }
+    extract_single(value, field)
+}
+
+fn extract_single(value: &Value, field: &str) -> Value {
     match value {
         Value::Array(arr) => {
+            // Numeric index
+            if let Ok(idx) = field.parse::<usize>() {
+                return arr.get(idx).cloned().unwrap_or(Value::Null);
+            }
+            // Field name from each object
             Value::Array(arr.iter()
                 .filter_map(|v| v.get(field).cloned())
                 .collect())
