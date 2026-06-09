@@ -349,6 +349,7 @@ dependencies = [
  "num-traits",
  "ryu",
  "self_cell",
+ "serde_core",
 ]
 
 [[package]]
@@ -678,6 +679,7 @@ dependencies = [
  "anyhow",
  "clap",
  "jaq-all",
+ "jaq-json",
  "serde_json",
  "serde_toon_format",
 ]

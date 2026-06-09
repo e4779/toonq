@@ -13,3 +13,4 @@ serde_toon_format = "0.1.2"
 serde_json = "1"
 anyhow = "1"
 jaq-all = { version = "0.1", features = ["formats"] }
+jaq-json = { version = "2", features = ["serde"] }
