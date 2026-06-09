@@ -1,6 +1,6 @@
 [package]
 name = "toonq"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "jq for TOON — query, filter, and inspect Token-Oriented Object Notation files"
 license = "ISC"

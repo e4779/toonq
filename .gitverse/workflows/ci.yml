@@ -38,6 +38,9 @@ jobs:
         run: cargo publish --dry-run
 
       - name: Publish to crates.io
-        run: cargo publish
+        run: |
+          export TOONQ_GIT_HASH=$(git rev-parse --short HEAD)
+          export TOONQ_GIT_FULL_HASH=$(git rev-parse HEAD)
+          cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
