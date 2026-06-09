@@ -1,33 +1,17 @@
 # AGENTS.md — toonq
 
-## Проект
+Read README.md for features, API, and project structure.
 
-`toonq` — jq для TOON. 313 строк Rust. Зависимость от `jaq` (внешний бинарь, `cargo install jaq`).
+## Architecture decisions (rationale)
 
-## Как работать с проектом
+1. **jaq-all as native library, not subprocess.** We embed `jaq-all` (the same engine as the `jaq` binary) directly. No external dependencies at runtime. Details: `docs/serde-research.md`.
 
-```bash
-cargo check          # быстрая проверка
-cargo build --release # бинарь в target/release/toonq
-bash test.sh          # 11 интеграционных тестов
-```
+2. **Manual Val conversion (60 lines).** `serde_json::Value` ↔ `jaq_json::Val` is done by hand because `jaq_json::Val` doesn't implement `Serialize`. The `serde`/`serde_core` split is a red herring — traits DO unify, `Serialize` simply doesn't exist. Details: `docs/serde-research.md`.
 
-## Архитектурные решения
+3. **No identity mode.** Empty `toonq file.toon` is an error. Format conversion (`--to json`) IS an operation.
 
-1. **jaq как subprocess, не библиотека.** `jaq-core` API слишком абстрактный. `jaq -c` даёт компактный вывод (одна строка на JSON-значение) и отлично интегрируется через stdin/stdout.
+## Gotchas
 
-2. **TOON ↔ JSON через serde_toon.** Нативный Rust-парсинг TOON в `serde_json::Value`, затем JSON подаётся в jaq.
-
-3. **`--to raw`** — выводит результат jaq напрямую, без TOON-обёртки. Полезно для пайплайнов.
-
-4. **`--from auto`** — авто-детект формата по расширению (.toon / .json). По умолчанию TOON.
-
-5. **Нет identity-режима** — пустой вызов `toonq file.toon` выдаёт ошибку с подсказкой. Конвертация формата (`--to json`) считается операцией.
-
-## Файлы
-
-- `src/main.rs` — весь код (313 строк)
-- `test.sh` — интеграционные тесты на реальных данных
-- `RESEARCH.md` — исследование экосистемы
-- `PLAN.md` — архитектура и план
-- `TODO.md` — статус задач
+- `Val::to_string()` returns JSON representation (with quotes). Use `Val::as_bytes()` for raw string data.
+- `Num::as_f64()` and `Num::is_int()` are `pub(crate)` — pattern-match variants directly.
+- `Val::Arr` wraps `Rc<Vec<Val>>`, but `FromIterator` works for construction.

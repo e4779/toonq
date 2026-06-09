@@ -110,7 +110,7 @@ cat data.toon | toonq --count
 
 ```
 TOON → serde_toon → jaq-all (native lib) → serde_toon → TOON
-        JSON parser    jq-compatible engine    TOON encoder
+       TOON parser    jq-compatible engine    TOON encoder
 ```
 
 `toonq` uses `jaq-all` — the same engine that powers the `jaq` binary — directly in-process. No subprocess, no JSON roundtrip, no runtime dependencies. See [docs/serde-research.md](docs/serde-research.md) for the architectural deep-dive.

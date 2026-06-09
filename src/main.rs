@@ -1,3 +1,10 @@
+//! jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.
+//!
+//! Reads TOON (or JSON) data, applies jq filters via the `jaq` engine,
+//! and outputs results in TOON or JSON format.
+//!
+//! Pipe-friendly: reads from stdin by default, writes to stdout.
+
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -6,6 +13,8 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use serde_json::Value;
 use serde_toon;
+
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
 
 /// jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.
 ///
@@ -16,7 +25,7 @@ use serde_toon;
 #[derive(Parser)]
 #[command(
     name = "toonq",
-    version,
+    version = VERSION,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
     after_help = "EXAMPLES:\n  toonq --head 5 data.toon\n  toonq --count data.toon\n  toonq --schema data.toon\n  toonq --stats data.toon\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq --extract close data.toon\n  toonq --slurp --count data.jsonl\n  toonq --to json data.toon\n  toonq --from json data.json\n\nSee docs/recipes.md for real-world workflows.",

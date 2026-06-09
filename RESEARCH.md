@@ -1,57 +1,67 @@
 # RESEARCH.md — toonq
 
-## Идея
+## The problem
 
-CLI-утилита для запросов, фильтрации и инспекции TOON-данных — аналог `jq`, работающий нативно с TOON-форматом.
+Build a `jq`-equivalent for TOON — query, filter, inspect TOON files without JSON intermediaries.
 
-## Реализация
+## Ecosystem scan (June 2026)
 
-**215 строк Rust**, бинарь 1.7MB. Зависимости:
-- `serde_toon_format` 0.1.2 — TOON ↔ serde_json::Value
-- `jaq` v3.0.0 — движок jq (как subprocess, не библиотека)
-- `clap` 4 — CLI
+### Existing candidates (non-working)
 
-## Исследование экосистемы (июнь 2026)
+| Crate | Version | Description | Issue |
+|-------|---------|-------------|-------|
+| [`oq`](https://crates.io/crates/oq) | 0.1.0 | "Object Query — jq for JSON, YAML, TOML, TOON" | Doesn't compile (10 lifetime errors in jaq-json) |
+| [`toon_ql`](https://crates.io/crates/toon_ql) | 0.0.2 | "A query language for Toon data" | Library-only, 0% docs, no CLI |
 
-### Существующие кандидаты (нерабочие)
+### TOON ecosystem
 
-| Крейт | Версия | Описание | Проблема |
-|-------|--------|----------|----------|
-| [`oq`](https://crates.io/crates/oq) | 0.1.0 | «Object Query — jq for JSON, YAML, TOML, and TOON» | Не компилируется: 10 lifetime-ошибок в jaq-json |
-| [`toon_ql`](https://crates.io/crates/toon_ql) | 0.0.2 | «A query language for Toon data» | Только библиотека, 0% доков, нет CLI |
+~180 crates on crates.io — all parsers/encoders. Zero query tools.
 
-### Экосистема TOON
+Official site (toonformat.dev) — CLI converter, playground, syntax highlighting only.
 
-Все крейты (~180) — конвертеры/парсеры. Ни одного query-инструмента.
+## Architecture evolution
 
-Официальный сайт (toonformat.dev) — только CLI-конвертер, playground, подсветка синтаксиса.
+### Attempt 1: jaq subprocess
 
-### Почему jaq subprocess, а не библиотека
-
-| Подход | Статус |
-|--------|--------|
-| jaq-core v3.0 как либа | Слишком абстрактный API (DataT, ValT, lifetimes). Не для простого использования. |
-| jaq-core v2.x + jaq-json | Совместимы, но нужна конвертация Val ↔ serde_json. Добавляет сложность. |
-| `jaq` binary subprocess | ✅ Работает. `-c` даёт компактный вывод (одна строка на значение). Никакой борьбы с API. |
-
-## Текущий API
-
-```bash
-# Инспекция
-toonq data.toon                    # pretty-print
-toonq --head 5 data.toon           # первые N записей
-toonq --tail 3 data.toon           # последние N
-toonq --count data.toon            # количество записей
-toonq --schema data.toon           # поля и типы
-
-# Запросы (полный jq-синтаксис через jaq)
-toonq -f '.[] | select(.close > 1400)' data.toon
-toonq -f 'sort_by(-.close) | .[0:3]' data.toon
-
-# Формат вывода
-toonq --to json data.toon          # TOON → JSON
-
-# Stdin/stdout
-cat data.toon | toonq -f '.[0:5]'
-toonq -f '.[]' data.toon | toonq --head 3
 ```
+TOON → JSON string → jaq -c subprocess → JSON string → TOON
+```
+
+**Verdict:** Worked, but JSON roundtrip + external dependency. Rejected.
+
+### Attempt 2: jaq-all native library
+
+`jaq-all` v0.1 — the same engine as the `jaq` binary, available as a Rust library.
+
+**Blocked by:** `jaq_json::Val` uses `serde_core`, `serde_json::Value` uses `serde`. Same traits, different crate names — Rust compiler doesn't unify them.
+
+### Attempt 3: Fork serde_toon on serde_core
+
+Replace `serde` with `serde_core` in `serde_toon` → direct TOON → `jaq_json::Val`.
+
+**Blocked by:** `jaq_json::Val` implements `Deserialize` but NOT `Serialize`. Even with the fork, we couldn't serialize Val back to TOON.
+
+### Solution: Manual conversion (60 lines)
+
+Bypass serde entirely. Convert between `serde_json::Value` and `jaq_json::Val` directly.
+
+Full details: `docs/serde-research.md`
+
+## Final architecture
+
+```
+TOON → serde_toon → serde_json::Value → json_to_jaq() → jaq_json::Val
+                                                              ↓
+                                                         jaq-all filter
+                                                              ↓
+TOON ← serde_toon ← serde_json::Value ← jaq_to_json() ← jaq_json::Val
+```
+
+- Zero JSON intermediaries
+- Zero subprocesses
+- Zero runtime dependencies
+- 60 lines of conversion code, battle-tested
+
+## Key finding
+
+The `serde`/`serde_core` split is NOT the bottleneck — Rust correctly unifies re-exported traits. The real issue: `jaq_json::Val` only implements `Deserialize`, not `Serialize`. Manual conversion fills this gap.
