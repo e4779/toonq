@@ -19,7 +19,7 @@ use serde_toon;
     version,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
-    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count",
+    after_help = "EXAMPLES:\n  # Inspection\n  toonq --head 5 data.toon              # First 5 records\n  toonq --tail 3 data.toon              # Last 3 records\n  toonq --count data.toon               # Record count\n  toonq --schema data.toon              # Fields and types\n  toonq --stats data.toon               # Token statistics (TOON vs JSON)\n\n  # JSONL support\n  toonq --slurp --count data.jsonl      # Parse JSONL as array\n  toonq --from json --count data.jsonl  # Auto-detect JSONL\n  toonq --slurp --truncate 80 --head 3 data.jsonl\n\n  # Queries (full jq syntax)\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon\n  toonq -f 'group_by(.currency) | .[] | {key, count: length}' portfolio.toon\n\n  # Format conversion\n  toonq --to json data.toon             # TOON → JSON\n  toonq --from json data.json           # JSON → TOON\n  toonq -f '.[0:3]' --to raw data.toon  # Raw jaq output (compact JSON)\n\n  # Pipelines\n  toonq -f 'filter' data.toon | toonq --head 3\n  toonq --to json data.toon | jq '. | length'\n  cat data.toon | toonq --count",
 )]
 struct Cli {
     /// jq filter expression to apply to input data.
@@ -63,6 +63,16 @@ struct Cli {
     /// Reports byte counts, estimated tokens, and savings percentage.
     #[arg(long, verbatim_doc_comment)]
     stats: bool,
+
+    /// Read input as JSONL (one JSON value per line) and combine into an array.
+    /// Equivalent to `jq -s '.'`. Auto-detected when JSON parsing fails.
+    #[arg(long = "slurp", verbatim_doc_comment)]
+    slurp: bool,
+
+    /// Truncate string fields to N characters, appending "…" if truncated.
+    /// Useful for inspecting data with long text fields.
+    #[arg(long = "truncate", verbatim_doc_comment)]
+    truncate: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -71,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     let has_operation = cli.filter.is_some()
         || cli.schema || cli.count
         || cli.head.is_some() || cli.tail.is_some()
-        || cli.stats
+        || cli.stats || cli.slurp || cli.truncate.is_some()
         || cli.output_format != "toon"
         || cli.input_format != "auto";
 
@@ -89,14 +99,35 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let format = detect_format(&cli.input_format, cli.input.as_deref());
-    let value: Value = match format.as_str() {
+    let format = if cli.slurp { "json".to_string() } else { detect_format(&cli.input_format, cli.input.as_deref()) };
+
+    // Parse input — try JSON/TOON first, fall back to JSONL if slurp or parse fails
+    let mut value: Value = match format.as_str() {
         "toon" => serde_toon::from_str(&input_text)
             .context("Failed to parse TOON input")?,
-        "json" => serde_json::from_str(&input_text)
-            .context("Failed to parse JSON input")?,
+        "json" => {
+            match serde_json::from_str(&input_text) {
+                Ok(v) => v,
+                Err(_) if cli.slurp => slurp_jsonl(&input_text)?,
+                Err(e) => {
+                    // Auto-detect: try JSONL as fallback
+                    match slurp_jsonl(&input_text) {
+                        Ok(v) => {
+                            eprintln!("Note: detected JSONL, parsing as array (use --slurp to skip this message)");
+                            v
+                        }
+                        Err(_) => return Err(e).context("Failed to parse JSON input. Not valid JSON or JSONL."),
+                    }
+                }
+            }
+        }
         other => bail!("Unknown input format: {other}"),
     };
+
+    // Apply truncation early if requested (affects --head, --tail, --schema output too)
+    if let Some(max_len) = cli.truncate {
+        truncate_strings(&mut value, max_len);
+    }
 
     if cli.stats {
         print_stats(&input_text, &value);
@@ -146,7 +177,7 @@ fn detect_format(explicit: &str, path: Option<&std::path::Path>) -> String {
     if let Some(p) = path {
         match p.extension().and_then(|e| e.to_str()) {
             Some("toon") => return "toon".into(),
-            Some("json") => return "json".into(),
+            Some("json") | Some("jsonl") => return "json".into(),
             _ => {}
         }
     }
@@ -378,4 +409,47 @@ fn print_stats(input_text: &str, value: &Value) {
         println!("Token savings: {savings:.1}% (TOON vs JSON)");
     }
     println!("Est. tokens:   TOON ~{toon_tokens}, JSON ~{json_tokens}");
+}
+
+// ── JSONL support ─────────────────────────────────────────────────────────
+
+/// Parse JSONL (one JSON value per line) into a JSON array.
+fn slurp_jsonl(input: &str) -> anyhow::Result<Value> {
+    let items: Result<Vec<Value>, _> = input
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l))
+        .collect();
+    let items = items.context("Failed to parse JSONL: each line must be valid JSON")?;
+    if items.is_empty() {
+        anyhow::bail!("JSONL input is empty");
+    }
+    Ok(Value::Array(items))
+}
+
+// ── String truncation ─────────────────────────────────────────────────────
+
+/// Recursively truncate all string values to `max_len` characters.
+/// Appends "…" if truncated.
+fn truncate_strings(value: &mut Value, max_len: usize) {
+    if max_len == 0 {
+        return;
+    }
+    match value {
+        Value::String(s) if s.len() > max_len => {
+            let trunc = s.chars().take(max_len).collect::<String>();
+            *s = format!("{trunc}…");
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                truncate_strings(v, max_len);
+            }
+        }
+        Value::Object(obj) => {
+            for (_, v) in obj.iter_mut() {
+                truncate_strings(v, max_len);
+            }
+        }
+        _ => {}
+    }
 }
