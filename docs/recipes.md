@@ -12,6 +12,10 @@ toonq --slurp -f 'group_by(.message.role) | map({role: .[0].message.role, count:
 toonq --slurp --extract text session.jsonl    # all text fields
 toonq --slurp --truncate 80 --extract text session.jsonl  # truncated for scanning
 
+# Extract specific messages by index
+toonq --slurp --extract 0 session.jsonl       # first message
+toonq --slurp --extract "0,2,8,12" --truncate 80 session.jsonl  # selected messages
+
 # Filter by role (user messages only)
 toonq --slurp -f 'map(select(.message.role == "user")) | map(.message.content[0].text)' session.jsonl
 
