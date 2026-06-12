@@ -16,3 +16,4 @@ Thumbs.db
 
 # Generated during CI publish
 GIT_HASH
+.deepthink/

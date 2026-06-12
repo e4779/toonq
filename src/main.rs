@@ -440,24 +440,52 @@ fn type_name(v: &Value) -> Value {
 
 fn print_stats(input_text: &str, value: &Value) {
     let toon_bytes = input_text.len();
-    let json_bytes = serde_json::to_string(value).map(|s| s.len()).unwrap_or(0);
+    let json_text = serde_json::to_string(value).unwrap_or_default();
+    let json_bytes = json_text.len();
 
     let record_count = match value {
         Value::Array(arr) => arr.len(),
         _ => 1,
     };
 
-    let toon_tokens = toon_bytes / 4;
-    let json_tokens = json_bytes / 4;
+    let toon_tokens = estimate_tokens(input_text);
+    let json_tokens = estimate_tokens(&json_text);
 
     println!("Records:       {record_count}");
     println!("TOON bytes:    {toon_bytes}");
     println!("JSON bytes:    {json_bytes}");
+    println!("TOON tokens:   ~{toon_tokens}");
+    println!("JSON tokens:   ~{json_tokens}");
     if json_bytes > 0 {
-        let savings = 100.0 * (1.0 - toon_bytes as f64 / json_bytes as f64);
-        println!("Token savings: {savings:.1}% (TOON vs JSON)");
+        let byte_savings = 100.0 * (1.0 - toon_bytes as f64 / json_bytes as f64);
+        println!("Byte savings:  {byte_savings:.1}%");
     }
-    println!("Est. tokens:   TOON ~{toon_tokens}, JSON ~{json_tokens}");
+    if json_tokens > 0 {
+        let token_savings = 100.0 * (1.0 - toon_tokens as f64 / json_tokens as f64);
+        println!("Token savings: {token_savings:.1}%");
+    }
+}
+
+/// Estimate token count using GPT-style heuristics: words + punctuation.
+/// This approximates BPE tokenization by counting whitespace-delimited words
+/// as one token each, and punctuation/special characters as separate tokens.
+fn estimate_tokens(text: &str) -> usize {
+    let mut tokens = 0;
+    let mut in_word = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            if !in_word {
+                tokens += 1;
+                in_word = true;
+            }
+        } else {
+            in_word = false;
+            if !c.is_whitespace() {
+                tokens += 1;
+            }
+        }
+    }
+    tokens
 }
 
 // ── JSONL support ─────────────────────────────────────────────────────────
