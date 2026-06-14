@@ -1,6 +1,6 @@
 # toonq — jq for TOON
 
-CLI tool for querying, filtering, inspecting, and converting [TOON](https://toonformat.dev) (Token-Oriented Object Notation) files — the equivalent of `jq` for TOON data.
+CLI tool for querying, filtering, inspecting, and converting [TOON](https://toonformat.dev) (Token-Oriented Object Notation) files — the equivalent of `jq` for TOON data. Built on [jaq](https://github.com/01mf02/jaq), a Rust reimplementation of jq — see [Differences from jq](#differences-from-jq) for limitations.
 
 ```
 toonq -f '.[] | select(.close > 10000) | {date, close}' data.toon
@@ -25,7 +25,7 @@ toonq --count data.toon               # How many records?
 toonq --schema data.toon              # What fields and types?
 toonq --stats data.toon               # TOON vs JSON size comparison
 
-# Query with full jq syntax
+# Query with jq syntax (via jaq engine)
 toonq -f '.[] | select(.close > 100)' data.toon
 toonq -f 'sort_by(-.sharpe) | .[0:5]' metrics.toon
 
@@ -60,7 +60,7 @@ cat data.toon | toonq -f '.[0:10]' | toonq --stats
 
 ### Queries
 
-`-f / --filter` accepts full jq syntax via the [jaq](https://github.com/01mf02/jaq) engine:
+`-f / --filter` accepts jq syntax via the [jaq](https://github.com/01mf02/jaq) engine (not 100% jq — see [differences](#differences-from-jq)):
 
 ```bash
 toonq -f '.[] | select(.close > 100)' data.toon
@@ -106,6 +106,28 @@ toonq --to json data.toon | jq '. | length'
 cat data.toon | toonq --count
 ```
 
+## Differences from jq
+
+toonq uses **jaq**, not the original `jq` (C). jaq implements a large subset of the jq language, but some features are missing or behave differently:
+
+| Feature | jq | jaq / toonq |
+|---------|:--:|:-----------:|
+| Basic syntax (pipe, select, map, sort_by, group_by) | ✅ | ✅ |
+| Object/array indexing and slicing | ✅ | ✅ |
+| Variable binding (`as $x`) | ✅ | ✅ |
+| Format strings (`"\(.x)"`) | ❌ | ✅ (jaq extension) |
+| `try` / `catch` | ✅ | ❌ |
+| `foreach` | ✅ | ❌ |
+| `transpose` | ✅ | ❌ |
+| `walk` | ✅ | ❌ |
+| Modules (`include`, `import`) | ✅ | ❌ |
+| `@csv`, `@tsv` format strings | ✅ | ❌ |
+| `input`, `inputs` (multiple inputs) | ✅ | ❌ |
+
+For typical data transformations (filter, map, sort, group, slice) the syntax is identical. Complex jq scripts using `try/catch` or modules will need adaptation.
+
+Full list: [jaq differences from jq](https://github.com/01mf02/jaq#differences-between-jaq-and-jq).
+
 ## How it works
 
 ```
@@ -120,6 +142,7 @@ TOON → serde_toon → jaq-all (native lib) → serde_toon → TOON
 - [docs/recipes.md](docs/recipes.md) — real-world workflows (chat logs, JSONL, financial data)
 - [docs/serde-research.md](docs/serde-research.md) — why manual Val conversion, serde/serde_core investigation
 - `toonq --help` — all flags and basic examples
+- [jaq differences from jq](https://github.com/01mf02/jaq#differences-between-jaq-and-jq) — upstream jaq limitations
 
 ## License
 
