@@ -67,7 +67,7 @@ jobs:
           # of the same tag after a downstream step failed). crates.io returns
           # non-zero with "already exists"; we probe the API first.
           VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if curl -sf "https://crates.io/api/v1/crates/toonq/$VER" >/dev/null 2>&1; then
+          if curl -sfA "toonq-ci" "https://crates.io/api/v1/crates/toonq/$VER" >/dev/null 2>&1; then
             echo "toonq $VER already on crates.io — skipping"
           else
             git rev-parse --short HEAD > GIT_HASH
