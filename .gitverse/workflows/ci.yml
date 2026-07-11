@@ -86,8 +86,6 @@ jobs:
           ARCHIVE: ${{ steps.pkg.outputs.archive }}
         run: |
           set -euo pipefail
-          # rust:latest lacks jq; install it for JSON parsing.
-          apt-get update -qq && apt-get install -y -qq jq >/dev/null
           OWNER=e4779
           REPO=toonq
           TAG="${{ github.ref_name }}"
@@ -103,15 +101,19 @@ jobs:
               -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false}" \
               "$API/releases")
           fi
-          # Sanitize: gitverse API may return unescaped control characters
-          # inside JSON strings (e.g. raw newlines in user bio field), which
-          # breaks strict JSON parsers like jq. Strip control chars (except
-          # tab/newline that are outside string values) before parsing.
-          REL=$(echo "$REL" | tr -d '\000-\010\013\014\016-\037')
-          REL_ID=$(echo "$REL" | jq -r .id)
+          # Gitverse API may return JSON with unescaped control characters
+          # inside string values (e.g. raw newlines in user bio). jq is a
+          # strict JSON parser and chokes on this; python's json.loads is
+          # more lenient, so use python3 for extraction (available in the
+          # Debian-based rust:latest image).
+          REL_ID=$(echo "$REL" | python3 -c "import sys,json; print(json.loads(sys.stdin.read(), strict=False)['id'])")
           echo "gitverse release id: $REL_ID"
 
-          EXISTING=$(echo "$REL" | jq -r ".assets[]? | select(.name==\"$ARCHIVE\") | .id" || true)
+          EXISTING=$(echo "$REL" | python3 -c "
+          import sys, json
+          rel = json.loads(sys.stdin.read(), strict=False)
+          print(next((a['id'] for a in rel.get('assets', []) if a['name'] == '$ARCHIVE'), ''))
+          " || true)
           if [ -n "$EXISTING" ]; then
             echo "deleting existing asset id=$EXISTING"
             curl -sf -X DELETE -H "$AUTH" -H "$ACCEPT" \
