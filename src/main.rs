@@ -35,10 +35,10 @@ struct Cli {
     #[arg(short = 'f', long = "filter", verbatim_doc_comment)]
     filter: Option<String>,
 
-    /// Input file path.
-    /// Omit or use "-" to read from stdin.
-    /// Format is auto-detected by extension (.toon / .json).
-    input: Option<PathBuf>,
+    /// Input file(s). Omit or use "-" for stdin.
+    /// With -f: first file is the filter input (.), rest available via `inputs`.
+    #[arg(value_name = "FILE")]
+    inputs: Vec<PathBuf>,
 
     /// Input format: toon, json, or auto (detect by file extension).
     /// Default: auto for files, toon for stdin.
@@ -87,6 +87,26 @@ struct Cli {
     /// Useful for inspecting data with long text fields.
     #[arg(long = "truncate", verbatim_doc_comment)]
     truncate: Option<usize>,
+
+    /// Pass a string variable: --arg name value (becomes $name == "value").
+    /// Multiple: --arg a 1 --arg b 2
+    #[arg(long = "arg", value_names = &["NAME", "VALUE"], num_args = 2, verbatim_doc_comment)]
+    args: Vec<String>,
+
+    /// Pass a JSON variable: --argjson name '{"k": 1}' (becomes $name == parsed JSON).
+    /// Multiple: --argjson a 1 --argjson b '[1,2]'
+    #[arg(long = "argjson", value_names = &["NAME", "JSON"], num_args = 2, verbatim_doc_comment)]
+    argjson: Vec<String>,
+
+    /// Don't read input: filter runs once with `null` as input.
+    /// Useful for generating data: toonq -n -f '[range(5)]'.
+    #[arg(short = 'n', long = "null-input", verbatim_doc_comment)]
+    null_input: bool,
+
+    /// Raw output: strings printed without quotes, each on its own line.
+    /// Non-string values print as compact JSON.
+    #[arg(short = 'r', long = "raw-output", verbatim_doc_comment)]
+    raw_output: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -96,6 +116,7 @@ fn main() -> anyhow::Result<()> {
         || cli.schema || cli.count
         || cli.head.is_some() || cli.tail.is_some()
         || cli.stats || cli.slurp || cli.truncate.is_some() || cli.extract.is_some()
+        || cli.null_input
         || cli.output_format != "toon"
         || cli.input_format != "auto";
 
@@ -108,37 +129,47 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let input_text = read_input(cli.input.as_deref())?;
+    // Collect variables from --arg (string) and --argjson (parsed JSON).
+    let (var_names, var_values) = collect_vars(&cli)?;
+
+    // With -n, we don't read any input file.
+    if cli.null_input {
+        if let Some(filter) = &cli.filter {
+            let result = run_jaq_native(None, filter, &cli, &var_names, &var_values)?;
+            if !cli.raw_output {
+                output_value(&result, &cli.output_format)?;
+            }
+            return Ok(());
+        }
+        anyhow::bail!("--null-input requires -f/--filter");
+    }
+
+    // Read and parse the primary input (first file or stdin).
+    let input_path = cli.inputs.first().map(|p| p.as_path());
+    let input_text = read_input(input_path)?;
     if input_text.trim().is_empty() {
         return Ok(());
     }
 
-    let format = if cli.slurp { "json".to_string() } else { detect_format(&cli.input_format, cli.input.as_deref()) };
-
-    // Parse input — try JSON/TOON first, fall back to JSONL if slurp or parse fails
-    let mut value: Value = match format.as_str() {
-        "toon" => serde_toon::from_str(&input_text)
-            .context("Failed to parse TOON input")?,
-        "json" => {
-            match serde_json::from_str(&input_text) {
-                Ok(v) => v,
-                Err(_) if cli.slurp => slurp_jsonl(&input_text)?,
-                Err(e) => {
-                    // Auto-detect: try JSONL as fallback
-                    match slurp_jsonl(&input_text) {
-                        Ok(v) => {
-                            eprintln!("Note: detected JSONL, parsing as array (use --slurp to skip this message)");
-                            v
-                        }
-                        Err(_) => return Err(e).context("Failed to parse JSON input. Not valid JSON or JSONL."),
-                    }
-                }
-            }
-        }
-        other => bail!("Unknown input format: {other}"),
+    let format = if cli.slurp {
+        "json".to_string()
+    } else {
+        detect_format(&cli.input_format, input_path)
     };
 
-    // Apply truncation early if requested (affects --head, --tail, --schema output too)
+    // Parse input — try JSON/TOON first, fall back to JSONL if slurp or parse fails.
+    let mut value: Value = parse_input(&input_text, &format, cli.slurp)?;
+
+    // Read additional input files (for `input`/`inputs` inside filters).
+    let extra_inputs: Vec<Value> = cli.inputs.iter().skip(1)
+        .map(|p| {
+            let text = read_input(Some(p))?;
+            let fmt = detect_format(&cli.input_format, Some(p));
+            parse_input(&text, &fmt, cli.slurp)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // Apply truncation early (affects --head, --tail, --schema output too).
     if let Some(max_len) = cli.truncate {
         truncate_strings(&mut value, max_len);
     }
@@ -159,15 +190,23 @@ fn main() -> anyhow::Result<()> {
     } else if let Some(field) = &cli.extract {
         extract_field(&value, field)
     } else if let Some(filter) = &cli.filter {
-        run_jaq_native(&value, filter, cli.output_format.as_str())?
+        run_jaq_native(
+            Some((&value, &extra_inputs)), filter, &cli,
+            &var_names, &var_values,
+        )?
     } else {
         value.clone()
     };
 
+    // For filter operations with raw output, run_jaq_native already printed directly.
+    if cli.filter.is_some() && cli.raw_output {
+        return Ok(());
+    }
+
     if cli.output_format != "raw" {
         output_value(&result, &cli.output_format)?;
     } else {
-        // Raw mode for non-filter operations: print compact JSON
+        // Raw mode for non-filter operations: print compact JSON.
         println!("{}", serde_json::to_string(&result)?);
     }
 
@@ -201,6 +240,50 @@ fn detect_format(explicit: &str, path: Option<&std::path::Path>) -> String {
         }
     }
     "toon".into()
+}
+
+/// Parse input text into a Value using the detected format, with JSONL fallback.
+fn parse_input(text: &str, format: &str, slurp: bool) -> anyhow::Result<Value> {
+    match format {
+        "toon" => serde_toon::from_str(text)
+            .context("Failed to parse TOON input"),
+        "json" => match serde_json::from_str(text) {
+            Ok(v) => Ok(v),
+            Err(_) if slurp => slurp_jsonl(text),
+            Err(e) => {
+                // Auto-detect: try JSONL as fallback.
+                match slurp_jsonl(text) {
+                    Ok(v) => {
+                        eprintln!("Note: detected JSONL, parsing as array (use --slurp to suppress)");
+                        Ok(v)
+                    }
+                    Err(_) => Err(e).context("Failed to parse JSON input. Not valid JSON or JSONL."),
+                }
+            }
+        },
+        other => bail!("Unknown input format: {other}"),
+    }
+}
+
+/// Collect variables from --arg (strings) and --argjson (parsed JSON values).
+/// Returns (names, values) in matching order for compile + runtime injection.
+fn collect_vars(cli: &Cli) -> anyhow::Result<(Vec<String>, Vec<Value>)> {
+    let mut names = Vec::new();
+    let mut values = Vec::new();
+
+    for chunk in cli.args.chunks_exact(2) {
+        names.push(chunk[0].clone());
+        values.push(Value::String(chunk[1].clone()));
+    }
+
+    for chunk in cli.argjson.chunks_exact(2) {
+        let val: Value = serde_json::from_str(&chunk[1])
+            .with_context(|| format!("--argjson {} invalid JSON: {}", chunk[0], chunk[1]))?;
+        names.push(chunk[0].clone());
+        values.push(val);
+    }
+
+    Ok((names, values))
 }
 
 // ── Native jaq filter (no subprocess, no JSON roundtrip) ──────────────────
@@ -284,28 +367,61 @@ fn jaq_to_json(v: &JVal) -> Value {
     }
 }
 
-fn run_jaq_native(value: &Value, filter_str: &str, output_format: &str) -> anyhow::Result<Value> {
+/// Run a jaq filter against the input.
+///
+/// `input` is `(primary, extras)` or `None` for `--null-input`.
+/// Extras are fed after the primary so `input`/`inputs` inside the filter
+/// can pull them from the stream.
+fn run_jaq_native(
+    input: Option<(&Value, &[Value])>,
+    filter_str: &str,
+    cli: &Cli,
+    var_names: &[String],
+    var_values: &[Value],
+) -> anyhow::Result<Value> {
     use jaq_all::data;
     use jaq_all::jaq_core::Vars;
 
-    let jaq_input = json_to_jaq(value);
+    // Compile: use compile_with when we have variables so the compiler
+    // registers $name references. Without variables, data::compile is fine.
+    let filter = if var_names.is_empty() {
+        data::compile(filter_str)
+    } else {
+        jaq_all::compile_with(filter_str, jaq_all::defs(), data::funs(), var_names)
+    }
+    .map_err(|reports| {
+        let msgs: Vec<String> = reports.iter()
+            .flat_map(|r| r.1.iter().map(|m| format!("{m:?}")))
+            .collect();
+        anyhow::anyhow!("jaq compile error: {}", msgs.join("\n"))
+    })?;
 
-    let filter = data::compile(filter_str)
-        .map_err(|reports| {
-            let msgs: Vec<String> = reports.iter()
-                .flat_map(|r| r.1.iter().map(|m| format!("{m:?}")))
-                .collect();
-            anyhow::anyhow!("jaq compile error: {}", msgs.join("\n"))
-        })?;
+    // Build the variable values vector (jaq Val type).
+    let jaq_vars: Vec<JVal> = var_values.iter().map(json_to_jaq).collect();
 
-    let runner = data::Runner::default();
+    // Build the input iterator: primary value then extras.
+    // For --null-input, we pass a dummy null; Runner.null_input replaces it.
+    let jaq_inputs: Vec<JVal> = match input {
+        None => vec![],
+        Some((primary, extras)) => {
+            let mut v = vec![json_to_jaq(primary)];
+            v.extend(extras.iter().map(json_to_jaq));
+            v
+        }
+    };
+
+    let runner = data::Runner {
+        null_input: cli.null_input,
+        ..data::Runner::default()
+    };
+
     let mut results: Vec<JVal> = Vec::new();
 
     data::run(
         &runner,
         &filter,
-        Vars::new([]),
-        std::iter::once(Ok::<_, String>(jaq_input)),
+        Vars::new(jaq_vars),
+        jaq_inputs.into_iter().map(Ok::<_, String>),
         |e| anyhow::anyhow!("jaq input error: {e}"),
         |v| {
             results.push(v.map_err(|e| anyhow::anyhow!("jaq error: {e}"))?);
@@ -313,9 +429,18 @@ fn run_jaq_native(value: &Value, filter_str: &str, output_format: &str) -> anyho
         },
     ).map_err(|e| anyhow::anyhow!("jaq execution error: {e}"))?;
 
-    if output_format == "raw" {
+    // Raw output: strings without quotes, non-strings as compact JSON, one per line.
+    if cli.raw_output {
         for v in &results {
-            println!("{v}");
+            match v {
+                JVal::BStr(_) | JVal::TStr(_) => {
+                    println!("{}", val_to_raw_string(v));
+                }
+                _ => {
+                    let jv = jaq_to_json(v);
+                    println!("{}", serde_json::to_string(&jv)?);
+                }
+            }
         }
         return Ok(Value::Null);
     }

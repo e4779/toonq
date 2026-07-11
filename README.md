@@ -6,6 +6,8 @@ CLI tool for querying, filtering, inspecting, and converting [TOON](https://toon
 toonq -f '.[] | select(.close > 10000) | {date, close}' data.toon
 toonq --extract close data.toon
 toonq --slurp --count session.jsonl
+toonq -n -f '[range(5)]'                          # generate without input
+toonq -f '.[] | select(.age > $min)' --argjson min 21 data.toon
 ```
 
 ## Installation
@@ -68,6 +70,51 @@ toonq -f 'sort_by(-.date) | .[0:5] | {date, close}' data.toon
 toonq -f 'group_by(.currency) | .[] | {currency: .[0].currency, count: length}' portfolio.toon
 ```
 
+### Variables (`--arg`, `--argjson`)
+
+Pass values into filters via named variables:
+
+```bash
+# --arg: string value
+toonq -f '.[] | select(.name == $target)' --arg target alice data.toon
+
+# --argjson: parsed JSON (numbers, arrays, objects)
+toonq -f '.[] | select(.age > $min)' --argjson min 21 data.toon
+toonq -f '. + $extra' --argjson extra '[4,5,6]' data.toon
+
+# Multiple variables
+toonq -f '.[] | select(.age > $min and .role == $role)' \
+  --argjson min 21 --arg role admin data.toon
+```
+
+### Null input (`-n`)
+
+Run the filter once with `null` as input — no file needed. Useful for generating data:
+
+```bash
+toonq -n -f '[range(5)]'                      # [0,1,2,3,4]
+toonq -n -f '$greeting + ", world!"' --arg greeting Hello -r
+```
+
+### Raw output (`-r`)
+
+Print string results without quotes, one per line. Non-string values stay compact JSON:
+
+```bash
+toonq -f '.[].name' -r data.toon              # alice
+                                               # bob
+toonq -f '.[].price' -r data.toon             # 100.5
+```
+
+### Multiple input files
+
+With multiple files, the first is the filter input (`.`), the rest are available via `input`/`inputs`:
+
+```bash
+toonq -f '. + inputs' a.json b.json           # concatenate arrays
+toonq -f '[inputs]' a.json b.json             # collect extras into array
+```
+
 ### Field extraction
 
 `--extract` pulls values by field name or array index:
@@ -108,23 +155,27 @@ cat data.toon | toonq --count
 
 ## Differences from jq
 
-toonq uses **jaq**, not the original `jq` (C). jaq implements a large subset of the jq language, but some features are missing or behave differently:
+toonq uses **jaq**, not the original `jq` (C). Modern jaq (3.x) implements nearly all of the jq language:
 
 | Feature | jq | jaq / toonq |
 |---------|:--:|:-----------:|
 | Basic syntax (pipe, select, map, sort_by, group_by) | ✅ | ✅ |
 | Object/array indexing and slicing | ✅ | ✅ |
 | Variable binding (`as $x`) | ✅ | ✅ |
+| External variables (`--arg`, `--argjson`) | ✅ | ✅ |
+| Null input (`-n`) | ✅ | ✅ |
+| Raw output (`-r`) | ✅ | ✅ |
+| Multiple inputs (`input`, `inputs`) | ✅ | ✅ |
+| `try` / `catch` | ✅ | ✅ |
+| `foreach` | ✅ | ✅ |
+| `walk` | ✅ | ✅ |
+| `transpose` | ✅ | ✅ |
+| `@csv`, `@tsv`, `@json` format strings | ✅ | ✅ |
 | Format strings (`"\(.x)"`) | ❌ | ✅ (jaq extension) |
-| `try` / `catch` | ✅ | ❌ |
-| `foreach` | ✅ | ❌ |
-| `transpose` | ✅ | ❌ |
-| `walk` | ✅ | ❌ |
-| Modules (`include`, `import`) | ✅ | ❌ |
-| `@csv`, `@tsv` format strings | ✅ | ❌ |
-| `input`, `inputs` (multiple inputs) | ✅ | ❌ |
+| Modules (`include`, `import` from file) | ✅ | ❌ |
+| `input_filename` | ✅ | ❌ |
 
-For typical data transformations (filter, map, sort, group, slice) the syntax is identical. Complex jq scripts using `try/catch` or modules will need adaptation.
+The only notable gaps are module loading from external files and `input_filename` (jaq implements the latter only in its CLI, not in the embedded library).
 
 Full list: [jaq differences from jq](https://github.com/01mf02/jaq#differences-between-jaq-and-jq).
 
