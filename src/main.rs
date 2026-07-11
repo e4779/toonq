@@ -27,7 +27,7 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"),
     version = VERSION,
     about = "jq for TOON — query, filter, inspect, and convert TOON files",
     long_about = "jq for TOON — query, filter, inspect, and convert Token-Oriented Object Notation files.\n\nReads TOON (or JSON) data, applies jq filters via the `jaq` engine, and outputs results in TOON or JSON format. Pipe-friendly: reads from stdin by default, writes to stdout.",
-    after_help = "EXAMPLES:\n  toonq --head 5 data.toon\n  toonq --count data.toon\n  toonq --schema data.toon\n  toonq --stats data.toon\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq --extract close data.toon\n  toonq --slurp --count data.jsonl\n  toonq --to json data.toon\n  toonq --from json data.json\n\nSee docs/recipes.md for real-world workflows.",
+    after_help = "EXAMPLES:\n  toonq --head 5 data.toon\n  toonq --count data.toon\n  toonq --schema data.toon\n  toonq --stats data.toon\n  toonq -f '.[] | select(.close > 100)' data.toon\n  toonq --extract close data.toon\n  toonq --slurp --count data.jsonl\n  toonq --to json data.toon\n  toonq --from json data.json\n  toonq -n -f '[range(5)]'\n  toonq -f '.[].name' -r data.toon\n  toonq -f '.[] | select(.age > $min)' --argjson min 21 data.toon\n\nSee docs/recipes.md for real-world workflows.",
 )]
 struct Cli {
     /// jq filter expression to apply to input data.
@@ -45,8 +45,9 @@ struct Cli {
     #[arg(long = "from", default_value = "auto", verbatim_doc_comment)]
     input_format: String,
 
-    /// Output format: toon (pretty-printed), json (pretty-printed), or raw (compact jaq output).
+    /// Output format: toon (pretty-printed), json (pretty-printed), or raw (compact JSON).
     /// Use `raw` for pipelines where you need compact machine-readable output.
+    /// For unquoted string output (like jq -r), use -r/--raw-output instead.
     #[arg(long = "to", default_value = "toon", verbatim_doc_comment)]
     output_format: String,
 
