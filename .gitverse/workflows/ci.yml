@@ -151,9 +151,19 @@ jobs:
               -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false}" \
               "$API/releases")
           fi
-          UPLOAD_URL=$(echo "$REL" | jq -r .upload_url | sed 's/{?name,label}//')
+          # Use python3 (not jq) for JSON parsing — consistent with the
+          # gitverse upload step; rust:latest lacks jq.
+          UPLOAD_URL=$(echo "$REL" | python3 -c "
+          import sys, json
+          url = json.loads(sys.stdin.read(), strict=False)['upload_url']
+          print(url.split('{')[0])
+          ")
 
-          EXISTING=$(echo "$REL" | jq -r ".assets[]? | select(.name==\"$ARCHIVE\") | .id" || true)
+          EXISTING=$(echo "$REL" | python3 -c "
+          import sys, json
+          rel = json.loads(sys.stdin.read(), strict=False)
+          print(next((a['id'] for a in rel.get('assets', []) if a['name'] == '$ARCHIVE'), ''))
+          " || true)
           if [ -n "$EXISTING" ]; then
             curl -sf -X DELETE -H "$AUTH" -H "$ACCEPT" \
               "$API/releases/assets/$EXISTING" || true
