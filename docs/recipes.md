@@ -63,6 +63,36 @@ toonq --extract close data.toon
 toonq --stats data.toon
 ```
 
+## Variables, generation, and raw output
+
+```bash
+# --argjson: pass numbers, arrays, or objects into filters
+toonq -f '.[] | select(.close > $threshold)' --argjson threshold 10000 data.toon
+toonq -f '. + $extra' --argjson extra '[{"date":"2099-01-01","close":0,"volume":0}]' data.toon
+
+# --arg: pass string values (jq semantics — always a string)
+toonq -f '.[] | select(.date == $target)' --arg target 2025-10-10 data.toon
+
+# Multiple variables
+toonq -f '.[] | select(.close > $min and .close < $max)' \
+  --argjson min 5000 --argjson max 8000 data.toon
+
+# -n: generate data without input
+toonq -n -f '[range(1;10)] | map(. * .)' --to json   # [1,4,9,...,81]
+
+# -r: raw output — strings without quotes, one per line
+toonq -f '.[].date' -r data.toon | head -5           # 2014-01-09
+                                                      # 2014-01-10
+                                                      # ...
+
+# Combine: generate + variable
+toonq -n -f '[$start, $start + 10]' --argjson start 5 --to json
+
+# Multi-file: merge datasets via inputs
+toonq -f '. + inputs' old-data.toon new-data.toon    # concatenate arrays
+toonq -f '[inputs]' primary.toon secondary.toon      # collect extras only
+```
+
 ## Format conversion
 
 ```bash

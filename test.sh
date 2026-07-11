@@ -41,5 +41,20 @@ $BIN -f '.[0].date' --to raw $DATA 2>/dev/null | grep -q "2014-01-09" && ok
 echo "11. sort + slice"
 $BIN -f 'sort_by(-.close) | .[0].date' --to raw $DATA 2>/dev/null | grep -q "2026-01-29" && ok
 
+echo "12. --argjson (numeric variable)"
+test "$($BIN -f '.[0].close > $threshold' --argjson threshold 1000 $DATA 2>/dev/null)" = "true" && ok
+
+echo "13. --arg (string variable)"
+test "$($BIN -f '.[0].date as $d | $d' --arg suffix "x" -r $DATA 2>/dev/null)" = "2014-01-09" && ok
+
+echo "14. -n (null input / generate)"
+test "$($BIN -n -f '[range(3)]' --to json 2>/dev/null | tr -d ' \n')" = '[0,1,2]' && ok
+
+echo "15. -r (raw output, no quotes)"
+$BIN -f '.[0].date' -r $DATA 2>/dev/null | grep -q '^2014-01-09$' && ok
+
+echo "16. -r (non-string stays compact JSON)"
+test "$($BIN -f '.[0].close' -r $DATA 2>/dev/null)" = "1310" && ok
+
 echo ""
-echo "✓ All 11 tests passed"
+echo "✓ All 16 tests passed"
