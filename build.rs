@@ -4,8 +4,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let hash = read_hash_file().or_else(|| git_short()).unwrap_or_else(|| "unknown".into());
-    let full = read_hash_file().or_else(|| git_full()).unwrap_or_else(|| "unknown".into());
+    let hash = read_hash_file().or_else(git_short).unwrap_or_else(|| "unknown".into());
+    let full = read_hash_file().or_else(git_full).unwrap_or_else(|| "unknown".into());
 
     println!("cargo:rustc-env=GIT_HASH={hash}");
     println!("cargo:rustc-env=GIT_FULL_HASH={full}");

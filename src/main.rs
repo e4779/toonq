@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::Parser;
 use serde_json::Value;
-use serde_toon;
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
 
@@ -178,7 +177,7 @@ fn main() -> anyhow::Result<()> {
 // ── Input ──────────────────────────────────────────────────────────────────
 
 fn read_input(path: Option<&std::path::Path>) -> anyhow::Result<String> {
-    let is_stdin = path.map_or(true, |p| p.to_str() == Some("-"));
+    let is_stdin = path.is_none_or(|p| p.to_str() == Some("-"));
     if is_stdin {
         let mut buf = String::new();
         io::stdin().read_to_string(&mut buf)
@@ -381,7 +380,7 @@ fn extract_field(value: &Value, field: &str) -> Value {
     if field.contains(',') {
         let keys: Vec<&str> = field.split(',').map(|s| s.trim()).collect();
         let results: Vec<Value> = keys.iter()
-            .filter_map(|k| Some(extract_single(value, k)))
+            .map(|k| extract_single(value, k))
             .collect();
         return Value::Array(results);
     }
@@ -495,7 +494,7 @@ fn slurp_jsonl(input: &str) -> anyhow::Result<Value> {
     let items: Result<Vec<Value>, _> = input
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l))
+        .map(serde_json::from_str)
         .collect();
     let items = items.context("Failed to parse JSONL: each line must be valid JSON")?;
     if items.is_empty() {
