@@ -103,6 +103,11 @@ jobs:
               -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false}" \
               "$API/releases")
           fi
+          # Sanitize: gitverse API may return unescaped control characters
+          # inside JSON strings (e.g. raw newlines in user bio field), which
+          # breaks strict JSON parsers like jq. Strip control chars (except
+          # tab/newline that are outside string values) before parsing.
+          REL=$(echo "$REL" | tr -d '\000-\010\013\014\016-\037')
           REL_ID=$(echo "$REL" | jq -r .id)
           echo "gitverse release id: $REL_ID"
 
